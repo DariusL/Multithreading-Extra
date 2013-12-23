@@ -7,7 +7,10 @@
 #include <sstream>
 
 using namespace std;
+
 typedef size_t uint;
+
+const string file = "LapunasD.txt";
 enum CODE
 {
 	CODE_CONSUMER = 1 << 0,
@@ -156,12 +159,60 @@ void syncOut(vector < vector < Counter >> &);
 string Titles();
 string Print(int nr, Data &s);
 string Print(Data &data);
+void Make(vector<Data> stuff);
+vector<Counter> Use(vector<Counter> stuff);
+void SendJobs();
 
 int main(int argc, char *argv[])
 {
 	MPI_Init(&argc, &argv);
+
+	int rank;
+	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+	if (rank == 0)
+	{
+		SendJobs();
+
+	}
+	else
+	{
+		Job job;
+		MPI_Recv(&job, sizeof(Job), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, nullptr);
+		if (job.consume)
+		{
+
+		}
+		else
+		{
+
+		}
+	}
 	MPI_Finalize();
 	return 0;
+}
+
+
+void SendJobs()
+{
+	auto producers = ReadStuff(file);
+	auto consumers = ReadCounters(file);
+	int r = 1;
+	Job job;
+	job.consume = false;
+	for (int i = 0; i < producers.size(); i++)
+	{
+		job.nr = i;
+		MPI_Send(&job, sizeof(Job), MPI_BYTE, r, 0, MPI_COMM_WORLD);
+		r++;
+	}
+	job.consume = true;
+	for (int i = 0; i < consumers.size(); i++)
+	{
+		job.nr = i;
+		MPI_Send(&job, sizeof(Job), MPI_BYTE, r, 0, MPI_COMM_WORLD);
+		r++;
+	}
 }
 
 //gamintoju skaitymas, modifikuotas veikti su naujais vartotoju duomenimis
