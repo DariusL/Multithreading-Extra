@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="LapunasD_Papildoma.cpp">
+    <ClCompile Include="LapunasD_Papildoma_a.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>
