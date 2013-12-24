@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iomanip>
 #include <sstream>
+#include <Windows.h>
 
 using namespace std;
 
@@ -15,33 +16,43 @@ enum CODE
 {
 	CODE_CONSUMER = 1 << 0,
 	CODE_PRODUCER = 1 << 1,
-	CODE_DONE     = 1 << 2
+	CODE_DONE = 1 << 2
 };
 
 struct Data
 {
+	Data(string input);
 	char pav[10];
 	int kiekis;
 	double kaina;
+	string Print(uint nr);
 };
 
-Data MakeData(string input)
+Data::Data(string input)
 {
-	Data data;
 	uint start, end;
 	start = 0;
 	end = input.find(' ');
-	memcpy(data.pav, input.substr(0, end).c_str(), 10);
+	memcpy(pav, input.substr(0, end).c_str(), 10);
 	start = end + 1;
 	end = input.find(' ', start);
-	data.kiekis = stoi(input.substr(start, end - start));
+	kiekis = stoi(input.substr(start, end - start));
 	start = end + 1;
-	data.kaina = stod(input.substr(start));
-	return data;
+	kaina = stod(input.substr(start));
+}
+
+string Data::Print(uint nr)
+{
+	stringstream ss;
+	ss << setw(3) << nr << setw(15) << pav << setw(7) << kiekis << setw(20) << kaina;
+	return ss.str();
 }
 
 struct Counter
 {
+	Counter() :count(0){}
+	Counter(string line);
+	Counter(Data &data);
 	char pav[10];
 	int count;
 public:
@@ -49,38 +60,44 @@ public:
 	int operator--(){ return --count; }
 	bool operator==(const Counter &other){ return pav == other.pav; }
 	bool operator<(const Counter &other){ return pav < other.pav; }
+	string Print(uint nr);
 };
 
-Counter MakeCounter(string line)
+Counter::Counter(string line)
 {
-	Counter counter;
 	uint start, end;
 	start = 0;
 	end = line.find(' ');
-	memcpy(counter.pav, line.substr(0, end).c_str(), 10);
+	memcpy(pav, line.substr(0, end).c_str(), 10);
 	start = end + 1;
 	end = line.find(' ', start);
-	counter.count = stoi(line.substr(start, end - start));
-	return counter;
+	count = stoi(line.substr(start, end - start));
+}
+
+Counter::Counter(Data &data)
+{
+	memcpy(pav, data.pav, 10);
+	count = data.kiekis;
+}
+
+string Counter::Print(uint nr)
+{
+	stringstream ss;
+	ss << setw(15) << pav << setw(5) << count;
+	return ss.str();
 }
 
 struct Job
 {
 	bool consume;
 	int nr;
-}; 
-
-union MessageData
-{
-	Counter request;
-	Data production;
 };
 
 struct Message
 {
 	int code;
 	int sender;
-	MessageData data;
+	Counter data;
 };
 
 class Buffer
@@ -154,17 +171,22 @@ string Buffer::Print()
 vector<vector<Data>> ReadStuff(string file);
 vector<vector<Counter>> ReadCounters(string file);
 vector<string> ReadLines(string file);
-void syncOut(vector < vector < Data >> &);
-void syncOut(vector < vector < Counter >> &);
 string Titles();
 string Print(int nr, Data &s);
 string Print(Data &data);
-void Make(vector<Data> stuff);
-vector<Counter> Use(vector<Counter> stuff);
+void Make(vector<Data> stuff, int rank);
+void Use(vector<Counter> stuff, int rank);
 void SendJobs();
+
+template <typename T>
+void ForEachForEach(vector < vector < T > > &data, string perVec);
 
 int main(int argc, char *argv[])
 {
+#ifdef _DEBUG
+	MessageBox(nullptr, L"", L"Attach debugger", MB_OK);
+#endif
+
 	MPI_Init(&argc, &argv);
 
 	int rank;
@@ -181,11 +203,11 @@ int main(int argc, char *argv[])
 		MPI_Recv(&job, sizeof(Job), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, nullptr);
 		if (job.consume)
 		{
-
+			Use(ReadCounters(file)[job.nr], rank);
 		}
 		else
 		{
-
+			Make(ReadStuff(file)[job.nr], rank);
 		}
 	}
 	MPI_Finalize();
@@ -197,6 +219,14 @@ void SendJobs()
 {
 	auto producers = ReadStuff(file);
 	auto consumers = ReadCounters(file);
+
+	cout << "\nGamintojai\n\n";
+	ForEachForEach(producers, "Gamintojas_");
+	cout << "\nVartotojai\n\n";
+	ForEachForEach(consumers, "Vartotojas_");
+
+	cout << "\nVartotojams truko\n\n";
+
 	int r = 1;
 	Job job;
 	job.consume = false;
@@ -233,7 +263,7 @@ vector<vector<Data>> ReadStuff(string file)
 		}
 		else
 		{
-			tmp.push_back(MakeData(lines[i]));
+			tmp.emplace_back(lines[i]);
 		}
 	}
 	return ret;
@@ -269,35 +299,21 @@ vector<vector<Counter>> ReadCounters(string file)
 		if (lines[i] == "")
 			ret.push_back(move(tmp));
 		else
-			tmp.push_back(MakeCounter(lines[i]));
+			tmp.emplace_back(lines[i]);
 	}
 	return ret;
 }
 
-
-void syncOut(vector < vector < Data >> &data)
+template <typename T>
+void ForEachForEach(vector < vector < T > > &data, string perVec)
 {
-	cout << setw(3) << "Nr" << Titles() << endl << endl;
-	for (unsigned int i = 0; i < data.size(); i++)
+	for (uint i = 0; i < data.size(); i++)
 	{
 		auto &vec = data[i];
-		cout << "Procesas_" << i << endl;
-		for (unsigned int j = 0; j < vec.size(); j++)
+		cout << perVec << i << endl;
+		for (uint j = 0; j < vec.size(); j++)
 		{
-			cout << Print(j, vec[j]) << endl;
-		}
-	}
-}
-
-void syncOut(vector < vector < Counter >> &data)
-{
-	for (unsigned int i = 0; i < data.size(); i++)
-	{
-		auto &vec = data[i];
-		cout << "Vartotojas_" << i << endl;
-		for (unsigned int j = 0; j < vec.size(); j++)
-		{
-			cout << setw(15) << vec[j].pav << setw(5) << vec[j].count << endl;
+			cout << vec[j].Print(j) << endl;
 		}
 	}
 }
@@ -321,4 +337,53 @@ string Print(Data &data)
 	stringstream ss;
 	ss << setw(15) << data.pav << setw(7) << data.kiekis << setw(20) << data.kaina;
 	return ss.str();
+}
+
+//gamybos funkcija
+void Make(vector<Data> stuff, int rank)
+{
+	Message msg;
+	msg.code = CODE_PRODUCER;
+	msg.sender = rank;
+	for (auto &s : stuff)
+	{
+		msg.data = Counter(s);
+		MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+	}
+	msg.code |= CODE_DONE;
+	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+}
+
+//vartojimo funkcija
+void Use(vector<Counter> stuff, int rank)
+{
+	auto i = stuff.begin();
+	vector<Counter> ret;
+	Message msg;
+	msg.code = CODE_CONSUMER;
+	msg.sender = rank;
+	while (stuff.size() > 0)
+	{
+		i++;
+		if (i >= stuff.end())
+			i = stuff.begin();
+
+		msg.data = *i;
+		MPI_Sendrecv(&msg, sizeof(msg), MPI_BYTE, 0, 0, &msg, sizeof(msg), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, nullptr);
+		(*i).count -= msg.data.count;
+
+		if ((*i).count <= 0)
+		{
+			stuff.erase(i);
+		}
+		else if (msg.code & CODE_DONE)
+		{
+			ret.push_back(*i);
+			stuff.erase(i);
+		}
+	}
+	for (auto c : ret)
+		cout << setw(15) << c.pav << setw(5) << c.count << endl;
+	msg.code |= CODE_DONE;
+	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
 }
