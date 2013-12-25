@@ -21,6 +21,13 @@ enum CODE
 	CODE_DONE = 1 << 2
 };
 
+enum TAG
+{
+	TAG_CONSUMER = 0,
+	TAG_PRODUCER,
+	TAG_ANY = MPI_ANY_TAG
+};
+
 struct Data
 {
 	Data(string input);
@@ -106,9 +113,7 @@ struct Message
 class Buffer
 {
 	vector<Counter> buffer;
-	vector<bool> active;
 	const int producerCount, consumerCount;
-	int producerStart, consumerStart;
 public:
 	Buffer(uint producerCount, uint consumerCount);
 	void Start();
@@ -119,62 +124,44 @@ private:
 };
 
 Buffer::Buffer(uint producerCount, uint consumerCount)
-:producerCount((int)producerCount), consumerCount((int)consumerCount),
-producerStart(1), consumerStart((int)producerCount + 1),
-active(consumerCount + producerCount + 1, true)
+:producerCount((int)producerCount), consumerCount((int)consumerCount)
 {
 }
 
 void Buffer::Start()
 {
 	Message msg;
-	int consumer = consumerStart;
-	int producer = producerStart;
+	TAG tag;
 	int activeProducers = producerCount;
 	int activeConsumers = consumerCount;
 	while (activeProducers + activeConsumers)
 	{
 		if (activeConsumers && (buffer.size() || activeProducers == 0))
+			tag = TAG_ANY;
+		else
+			tag = TAG_PRODUCER;
+		MPI_Recv(&msg, sizeof(msg), MPI_BYTE, MPI_ANY_SOURCE, tag, MPI_COMM_WORLD, &status);
+		if (msg.code & CODE_CONSUMER)
 		{
-			if (active[consumer])
+			if (msg.code & CODE_DONE)
 			{
-				MPI_Recv(&msg, sizeof(msg), MPI_BYTE, consumer, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-				if (msg.code & CODE_DONE)
-				{
-					active[consumer] = false;
-					activeConsumers--;
-				}
-				else
-				{
-					int taken = Take(msg.data);
-					if (activeProducers == 0)
-						msg.code |= CODE_DONE;
-					msg.data.count = taken;
-					MPI_Send(&msg, sizeof(msg), MPI_BYTE, consumer, 0, MPI_COMM_WORLD);
-				}
+				activeConsumers--;
 			}
-			consumer++;
-			if (consumer >= consumerCount + consumerStart)
-				consumer = consumerStart;
+			else
+			{
+				int taken = Take(msg.data);
+				if (activeProducers == 0)
+					msg.code |= CODE_DONE;
+				msg.data.count = taken;
+				MPI_Send(&msg, sizeof(msg), MPI_BYTE, msg.sender, 0, MPI_COMM_WORLD);
+			}
 		}
-		if (activeProducers)
+		else
 		{
-			if (active[producer])
-			{
-				MPI_Recv(&msg, sizeof(msg), MPI_BYTE, producer, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-				if (msg.code & CODE_DONE)
-				{
-					active[producer] = false;
-					activeProducers--;
-				}
-				else
-				{
-					Add(msg.data);
-				}
-			}
-			producer++;
-			if (producer >= producerCount + producerStart)
-				producer = producerStart;
+			if (msg.code & CODE_DONE)
+				activeProducers--;
+			else
+				Add(msg.data);
 		}
 	}
 }
@@ -419,10 +406,10 @@ void Make(vector<Data> stuff, int rank)
 	for (auto &s : stuff)
 	{
 		msg.data = Counter(s);
-		MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+		MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, TAG_PRODUCER, MPI_COMM_WORLD);
 	}
 	msg.code |= CODE_DONE;
-	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, TAG_PRODUCER, MPI_COMM_WORLD);
 }
 
 //vartojimo funkcija
@@ -437,7 +424,7 @@ void Use(vector<Counter> stuff, int rank)
 	{
 		msg.data = *i;
 		msg.code = CODE_CONSUMER;
-		MPI_Sendrecv(&msg, sizeof(msg), MPI_BYTE, 0, 0, &msg, sizeof(msg), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+		MPI_Sendrecv(&msg, sizeof(msg), MPI_BYTE, 0, TAG_CONSUMER, &msg, sizeof(msg), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		(*i).count -= msg.data.count;
 		if ((*i).count <= 0)
 		{
@@ -460,5 +447,5 @@ void Use(vector<Counter> stuff, int rank)
 	for (auto c : ret)
 		cout << setw(15) << c.pav << setw(5) << c.count << endl;
 	msg.code |= CODE_DONE;
-	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, 0, MPI_COMM_WORLD);
+	MPI_Send(&msg, sizeof(msg), MPI_BYTE, 0, TAG_CONSUMER, MPI_COMM_WORLD);
 }
