@@ -11,6 +11,8 @@ using namespace std;
 
 typedef size_t uint;
 
+MPI_Status status;
+
 const string file = "LapunasD.txt";
 enum CODE
 {
@@ -58,8 +60,9 @@ struct Counter
 public:
 	int operator++(){ return ++count; }
 	int operator--(){ return --count; }
-	bool operator==(const Counter &other){ return pav == other.pav; }
-	bool operator<(const Counter &other){ return pav < other.pav; }
+	bool operator==(const Counter &other){ return strcmp(pav, other.pav) == 0; }
+	bool operator <(const Counter &other){ return strcmp(pav, other.pav)  > 0; }
+	bool operator >(const Counter &other){ return strcmp(pav, other.pav)  < 0; }
 	string Print(uint nr);
 };
 
@@ -103,16 +106,80 @@ struct Message
 class Buffer
 {
 	vector<Counter> buffer;
+	vector<bool> active;
+	const int producerCount, consumerCount;
+	int producerStart, consumerStart;
 public:
-	Buffer(){}
-	bool Add(Counter c);
-	int Take(Counter c);
-	int Size();
+	Buffer(uint producerCount, uint consumerCount);
+	void Start();
 	string Print();
-	void Done();
+private:
+	void Add(Counter c);
+	int Take(Counter c);
 };
 
-bool Buffer::Add(Counter c)
+Buffer::Buffer(uint producerCount, uint consumerCount)
+:producerCount((int)producerCount), consumerCount((int)consumerCount),
+producerStart(1), consumerStart((int)producerCount + 1),
+active(consumerCount + producerCount + 1, true)
+{
+}
+
+void Buffer::Start()
+{
+	Message msg;
+	int consumer = consumerStart;
+	int producer = producerStart;
+	int activeProducers = producerCount;
+	int activeConsumers = consumerCount;
+	while (activeProducers + activeConsumers)
+	{
+		if (activeConsumers && (buffer.size() || activeProducers == 0))
+		{
+			if (active[consumer])
+			{
+				MPI_Recv(&msg, sizeof(msg), MPI_BYTE, consumer, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+				if (msg.code & CODE_DONE)
+				{
+					active[consumer] = false;
+					activeConsumers--;
+				}
+				else
+				{
+					int taken = Take(msg.data);
+					if (activeProducers == 0)
+						msg.code |= CODE_DONE;
+					msg.data.count = taken;
+					MPI_Send(&msg, sizeof(msg), MPI_BYTE, consumer, 0, MPI_COMM_WORLD);
+				}
+			}
+			consumer++;
+			if (consumer >= consumerCount + consumerStart)
+				consumer = consumerStart;
+		}
+		if (activeProducers)
+		{
+			if (active[producer])
+			{
+				MPI_Recv(&msg, sizeof(msg), MPI_BYTE, producer, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
+				if (msg.code & CODE_DONE)
+				{
+					active[producer] = false;
+					activeProducers--;
+				}
+				else
+				{
+					Add(msg.data);
+				}
+			}
+			producer++;
+			if (producer >= producerCount + producerStart)
+				producer = producerStart;
+		}
+	}
+}
+
+void Buffer::Add(Counter c)
 {
 	//randamas atitinkamo pavadinimo skaitliukas
 	auto i = find(buffer.begin(), buffer.end(), c);
@@ -135,8 +202,6 @@ bool Buffer::Add(Counter c)
 		if (buffer.size() == size)
 			buffer.push_back(c);
 	}
-	//pazadinamas viena duomenu laukianti gija
-	return true;
 }
 
 int Buffer::Take(Counter c)
@@ -176,31 +241,36 @@ string Print(int nr, Data &s);
 string Print(Data &data);
 void Make(vector<Data> stuff, int rank);
 void Use(vector<Counter> stuff, int rank);
-void SendJobs();
+void SendJobs(uint &consumers, uint &producers);
 
 template <typename T>
 void ForEachForEach(vector < vector < T > > &data, string perVec);
 
 int main(int argc, char *argv[])
 {
-#ifdef _DEBUG
-	MessageBox(nullptr, L"", L"Attach debugger", MB_OK);
-#endif
-
 	MPI_Init(&argc, &argv);
 
 	int rank;
 	MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+#ifdef _DEBUG
+	if (rank == 0)
+		MessageBox(nullptr, L"", L"Attach debugger", MB_OK);
+#endif
+	MPI_Barrier(MPI_COMM_WORLD);
+
 	if (rank == 0)
 	{
-		SendJobs();
-
+		uint consumers, producers;
+		SendJobs(consumers, producers);
+		Buffer buffer(producers, consumers);
+		buffer.Start();
+		cout << endl << buffer.Print();
 	}
 	else
 	{
 		Job job;
-		MPI_Recv(&job, sizeof(Job), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, nullptr);
+		MPI_Recv(&job, sizeof(Job), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		if (job.consume)
 		{
 			Use(ReadCounters(file)[job.nr], rank);
@@ -215,7 +285,7 @@ int main(int argc, char *argv[])
 }
 
 
-void SendJobs()
+void SendJobs(uint &consumerCount, uint &producerCount)
 {
 	auto producers = ReadStuff(file);
 	auto consumers = ReadCounters(file);
@@ -224,8 +294,6 @@ void SendJobs()
 	ForEachForEach(producers, "Gamintojas_");
 	cout << "\nVartotojai\n\n";
 	ForEachForEach(consumers, "Vartotojas_");
-
-	cout << "\nVartotojams truko\n\n";
 
 	int r = 1;
 	Job job;
@@ -243,6 +311,8 @@ void SendJobs()
 		MPI_Send(&job, sizeof(Job), MPI_BYTE, r, 0, MPI_COMM_WORLD);
 		r++;
 	}
+	consumerCount = consumers.size();
+	producerCount = producers.size();
 }
 
 //gamintoju skaitymas, modifikuotas veikti su naujais vartotoju duomenimis
@@ -316,6 +386,7 @@ void ForEachForEach(vector < vector < T > > &data, string perVec)
 			cout << vec[j].Print(j) << endl;
 		}
 	}
+	cout << endl;
 }
 
 string Print(int nr, Data &s)
@@ -364,22 +435,26 @@ void Use(vector<Counter> stuff, int rank)
 	msg.sender = rank;
 	while (stuff.size() > 0)
 	{
-		i++;
-		if (i >= stuff.end())
-			i = stuff.begin();
-
 		msg.data = *i;
-		MPI_Sendrecv(&msg, sizeof(msg), MPI_BYTE, 0, 0, &msg, sizeof(msg), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, nullptr);
+		msg.code = CODE_CONSUMER;
+		MPI_Sendrecv(&msg, sizeof(msg), MPI_BYTE, 0, 0, &msg, sizeof(msg), MPI_BYTE, 0, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 		(*i).count -= msg.data.count;
-
 		if ((*i).count <= 0)
 		{
 			stuff.erase(i);
+			i = stuff.begin();
 		}
 		else if (msg.code & CODE_DONE)
 		{
 			ret.push_back(*i);
 			stuff.erase(i);
+			i = stuff.begin();
+		}
+		else
+		{
+			i++;
+			if (i >= stuff.end())
+				i = stuff.begin();
 		}
 	}
 	for (auto c : ret)
